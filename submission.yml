@@ -1,0 +1,10 @@
+setup:
+  - command: "docker-compose build"
+  - command: "docker-compose up -d postgres minio"
+  - command: "docker-compose run --rm app python -m app.database --migrate"
+
+test:
+  - command: "docker-compose run --rm app pytest tests/ -v --tb=short"
+
+benchmark:
+  - command: "docker-compose run --rm app python scripts/run_benchmark.py"
