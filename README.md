@@ -2,6 +2,20 @@
 
 A production-grade content delivery API built with **Python 3.11 + FastAPI**, designed for high-performance asset serving via AWS CloudFront CDN. Implements full HTTP caching (ETags, Cache-Control, 304 Not Modified), immutable content versioning, and secure time-limited private access tokens.
 
+## Project Demo
+
+Full architecture walkthrough and live API demonstration.
+
+**Watch the demo:**  
+[![Watch the Demo](https://img.shields.io/badge/Watch-Demo%20Video-red?style=for-the-badge&logo=google-drive)](https://drive.google.com/file/d/1Dic8svhM7ZjhlRnoYswZOIcKr1mWz8ue/view?usp=sharing)
+
+The demo covers:
+- System architecture and request flow
+- FastAPI code walkthrough
+- ETag caching and conditional requests
+- Publishing new asset versions
+- Live API testing with curl
+
 ---
 
 ## Features
