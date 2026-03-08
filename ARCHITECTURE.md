@@ -4,12 +4,12 @@
 
 ```mermaid
 graph TD
-    CLIENT["🌐 Client (Browser / App)"]
-    CDN["☁️ AWS CloudFront CDN<br/>(Edge Network)"]
-    API["🐍 FastAPI Origin Server<br/>(Python 3.11 · Docker)"]
-    DB["🐘 PostgreSQL<br/>(RDS / Docker)"]
-    S3["🪣 AWS S3 / MinIO<br/>(Object Storage)"]
-    CF_INVALID["⚡ CloudFront Invalidation"]
+    CLIENT["Client (Browser / App)"]
+    CDN["AWS CloudFront CDN<br/>(Edge Network)"]
+    API["FastAPI Origin Server<br/>(Python 3.11 · Docker)"]
+    DB["PostgreSQL<br/>(RDS / Docker)"]
+    S3["AWS S3 / MinIO<br/>(Object Storage)"]
+    CF_INVALID["CloudFront Invalidation"]
 
     CLIENT -->|"HTTPS Request"| CDN
     CDN -->|"Cache HIT → serve from edge<br/>(no origin request)"| CLIENT
@@ -180,10 +180,10 @@ access_tokens    -- Short-lived tokens (token, asset_id, expires_at)
 
 | Endpoint | Cache-Control | ETag | CDN Invalidation |
 |---|---|---|---|
-| `GET /assets/{id}/download` (public) | `public, s-maxage=3600, max-age=60` | ✅ Yes → 304 | On publish |
-| `GET /assets/{id}/download` (private) | `private, no-store, no-cache, must-revalidate` | ✅ (no 304) | N/A |
-| `GET /assets/public/{version_id}` | `public, max-age=31536000, immutable` | ✅ Yes | Never needed — new version = new URL |
-| `GET /assets/private/{token}` | `private, no-store, no-cache, must-revalidate` | ✅ (no 304) | Token TTL handles access revocation |
+| `GET /assets/{id}/download` (public) | `public, s-maxage=3600, max-age=60` | Yes → 304 | On publish |
+| `GET /assets/{id}/download` (private) | `private, no-store, no-cache, must-revalidate` | (no 304) | N/A |
+| `GET /assets/public/{version_id}` | `public, max-age=31536000, immutable` | Yes | Never needed — new version = new URL |
+| `GET /assets/private/{token}` | `private, no-store, no-cache, must-revalidate` | (no 304) | Token TTL handles access revocation |
 
 ---
 

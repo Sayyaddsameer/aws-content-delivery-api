@@ -140,9 +140,9 @@ With CloudFront properly configured and a **mixed public asset workload**:
 
 | Traffic Type | % of Total Requests | Hits Origin |
 |---|---|---|
-| CDN cache HIT (no origin request) | ~97% | ❌ No |
-| CDN cache MISS → origin (fresh asset or expired TTL) | ~2% | ✅ Yes |
-| Private asset requests (always origin) | ~1% | ✅ Yes |
+| CDN cache HIT (no origin request) | ~97% | No |
+| CDN cache MISS → origin (fresh asset or expired TTL) | ~2% | Yes |
+| Private asset requests (always origin) | ~1% | Yes |
 
 **Result**: Only ~3% of total traffic reaches the origin server — a **33× reduction** in origin load compared to non-cached serving.
 
