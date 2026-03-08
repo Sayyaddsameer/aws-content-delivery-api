@@ -1,0 +1,518 @@
+openapi: "3.0.3"
+info:
+  title: AWS Content Delivery API
+  description: |
+    High-performance content delivery API built with **Python 3.11 + FastAPI**.
+    
+    Integrates with **AWS CloudFront** (CDN), **AWS S3 / MinIO** (object storage), and
+    **PostgreSQL** (metadata). Implements full HTTP caching standards:
+    
+    - **ETag** (SHA-256 strong entity tags)
+    - **Conditional GET** (`If-None-Match` → `304 Not Modified`)
+    - **Immutable content versioning** (`Cache-Control: immutable`)
+    - **Secure private access tokens** (256-bit entropy, configurable TTL)
+    - **CDN cache invalidation** on publish
+    
+    ### Cache-Control header strategy
+    
+    | Endpoint | Cache-Control |
+    |---|---|
+    | `GET /assets/{id}/download` (public) | `public, s-maxage=3600, max-age=60` |
+    | `GET /assets/{id}/download` (private) | `private, no-store, no-cache, must-revalidate` |
+    | `GET /assets/public/{version_id}` | `public, max-age=31536000, immutable` |
+    | `GET /assets/private/{token}` | `private, no-store, no-cache, must-revalidate` |
+
+  version: "1.0.0"
+  contact:
+    name: API Support
+
+servers:
+  - url: http://localhost:3000
+    description: Local development (Docker Compose)
+  - url: https://your-cloudfront.cloudfront.net
+    description: Production (CloudFront CDN)
+
+tags:
+  - name: assets
+    description: Asset upload, download, and versioning operations
+  - name: public
+    description: Publicly cached asset versions (immutable CDN caching)
+  - name: private
+    description: Secure private asset access via time-limited tokens
+  - name: tokens
+    description: Access token management for private assets
+  - name: health
+    description: Health check
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      description: Returns `200 OK` when the API is running.
+      operationId: health_check
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /assets/upload:
+    post:
+      tags: [assets]
+      summary: Upload a new asset
+      description: |
+        Upload a file via `multipart/form-data`. The API:
+        1. Computes a SHA-256 ETag from the file bytes (stored, never recalculated)
+        2. Stores the file in S3/MinIO
+        3. Creates an `assets` record in PostgreSQL
+      operationId: upload_asset
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: File to upload (any MIME type)
+      responses:
+        "201":
+          description: Asset created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetResponse"
+              example:
+                id: a1b2c3d4-0000-0000-0000-000000000001
+                filename: photo.jpg
+                mime_type: image/jpeg
+                size_bytes: 204800
+                etag: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                object_storage_key: assets/a1b2c3d4.../photo.jpg
+                is_private: false
+                created_at: "2026-03-02T05:00:00+00:00"
+                updated_at: "2026-03-02T05:00:00+00:00"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /assets/{asset_id}/download:
+    get:
+      tags: [assets]
+      summary: Download an asset
+      description: |
+        Download an asset with full HTTP caching headers.
+
+        **Conditional GET support**: Send `If-None-Match` with the previously
+        received ETag. If the content hasn't changed, the server returns
+        `304 Not Modified` with an empty body, saving bandwidth.
+
+        **Cache-Control**:
+        - Public assets: `public, s-maxage=3600, max-age=60`
+        - Private assets: `private, no-store, no-cache, must-revalidate`
+      operationId: download_asset
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            ETag value from a previous response (e.g. `"e3b0c44298..."`)
+            If the asset's ETag matches, a `304 Not Modified` is returned.
+          example: '"e3b0c44298fc1c149afbf4c8996fb924"'
+      responses:
+        "200":
+          description: Asset content with HTTP caching headers
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: SHA-256 strong ETag (quoted)
+              example: '"e3b0c44298fc1c149afbf4c8996fb924"'
+            Last-Modified:
+              schema:
+                type: string
+              description: RFC 7231 date-time of last update
+              example: Mon, 02 Mar 2026 05:00:00 GMT
+            Cache-Control:
+              schema:
+                type: string
+              description: Caching directive based on asset visibility
+              example: public, s-maxage=3600, max-age=60
+            Content-Length:
+              schema:
+                type: integer
+              description: File size in bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "304":
+          description: Not Modified — content unchanged, use cached copy
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: SHA-256 strong ETag (quoted)
+            Cache-Control:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    head:
+      tags: [assets]
+      summary: Asset metadata (no body)
+      description: |
+        Same as `GET /assets/{asset_id}/download` but returns headers only —
+        no response body. Use this to inspect the ETag, Cache-Control, and
+        Last-Modified without downloading the full content.
+      operationId: head_asset
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Headers only (ETag, Cache-Control, Last-Modified, Content-Length)
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+            Content-Type:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /assets/{asset_id}/publish:
+    post:
+      tags: [assets]
+      summary: Publish a new version of an asset
+      description: |
+        Upload new content for an existing asset. The API:
+        1. Stores the new file under a new versioned S3 key
+        2. Creates an `asset_versions` record (immutable snapshot)
+        3. Updates the parent `assets` record (new ETag, updated_at)
+        4. **Triggers CloudFront cache invalidation** for `GET /assets/{id}/download`
+
+        After publish, the old ETag is invalidated at the CDN.
+        The `version.public_url` points to the new immutable versioned URL.
+      operationId: publish_asset
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: New version of the file
+      responses:
+        "200":
+          description: Version published and CDN invalidated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishResponse"
+              example:
+                id: a1b2c3d4-0000-0000-0000-000000000001
+                filename: photo-v2.jpg
+                mime_type: image/jpeg
+                size_bytes: 307200
+                etag: newsha256hashvalue
+                current_version_id: v1b2c3d4-0000-0000-0000-000000000001
+                is_private: false
+                updated_at: "2026-03-02T06:00:00+00:00"
+                version:
+                  id: v1b2c3d4-0000-0000-0000-000000000001
+                  object_storage_key: assets/a1b2c3d4.../versions/.../photo-v2.jpg
+                  public_url: /assets/public/v1b2c3d4-0000-0000-0000-000000000001
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /assets/{asset_id}/token:
+    post:
+      tags: [tokens]
+      summary: Create a private access token for an asset
+      description: |
+        Generates a cryptographically secure 256-bit access token for a private asset.
+        Token is valid for `TOKEN_TTL_SECONDS` (default 3600 seconds / 1 hour).
+        
+        Use the returned token to access the asset via `GET /assets/private/{token}`.
+      operationId: create_access_token
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "201":
+          description: Access token created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+              example:
+                token: a3f9b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
+                asset_id: a1b2c3d4-0000-0000-0000-000000000001
+                expires_at: "2026-03-02T06:00:00+00:00"
+                access_url: /assets/private/a3f9b2c1d4e5f6a7...
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /assets/public/{version_id}:
+    get:
+      tags: [public]
+      summary: Serve an immutable asset version
+      description: |
+        Serve a specific, immutable content version. Returns:
+        ```
+        Cache-Control: public, max-age=31536000, immutable
+        ```
+        
+        This instructs browsers and CDN to cache the content for **1 year** without
+        revalidation. Since the URL contains the `version_id`, new content always
+        gets a new URL — no invalidation needed. Old URLs remain permanently cached.
+        
+        This is the **optimal pattern for static assets** (JS bundles, images, etc.).
+      operationId: get_public_version
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: UUID of the asset version (from `POST /assets/{id}/publish` response)
+      responses:
+        "200":
+          description: Immutable versioned asset
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: SHA-256 strong ETag (quoted)
+            Last-Modified:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `public, max-age=31536000, immutable`
+              example: public, max-age=31536000, immutable
+            Content-Length:
+              schema:
+                type: integer
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /assets/private/{token}:
+    get:
+      tags: [private]
+      summary: Access a private asset via time-limited token
+      description: |
+        Serve a private asset using a short-lived access token. The token:
+        - Must exist in the database
+        - Must not have expired (`expires_at > NOW()`)
+        
+        On success, returns the asset with:
+        ```
+        Cache-Control: private, no-store, no-cache, must-revalidate
+        ```
+        This prevents any CDN or shared cache from storing the content.
+        
+        On failure, returns `401 Unauthorized`.
+      operationId: get_private_asset
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 64
+            maxLength: 64
+          description: 64-character hex access token (256-bit entropy)
+      responses:
+        "200":
+          description: Private asset content
+          headers:
+            ETag:
+              schema:
+                type: string
+            Last-Modified:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `private, no-store, no-cache, must-revalidate`
+              example: private, no-store, no-cache, must-revalidate
+            Content-Length:
+              schema:
+                type: integer
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Invalid or expired access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              examples:
+                expired:
+                  value:
+                    detail: Access token has expired.
+                invalid:
+                  value:
+                    detail: Invalid or unknown access token.
+
+components:
+  parameters:
+    AssetId:
+      name: asset_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID of the asset
+
+  schemas:
+    AssetResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique asset identifier
+        filename:
+          type: string
+          description: Original filename
+        mime_type:
+          type: string
+          description: MIME type of the asset
+        size_bytes:
+          type: integer
+          description: File size in bytes
+        etag:
+          type: string
+          description: SHA-256 content hash (64 hex chars, no quotes)
+          minLength: 64
+          maxLength: 64
+        object_storage_key:
+          type: string
+          description: S3/MinIO object key
+        is_private:
+          type: boolean
+          description: Whether the asset is private
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PublishResponse:
+      allOf:
+        - $ref: "#/components/schemas/AssetResponse"
+        - type: object
+          properties:
+            current_version_id:
+              type: string
+              format: uuid
+            version:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                object_storage_key:
+                  type: string
+                public_url:
+                  type: string
+                  description: URL to access the immutable version
+
+    TokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: 64-character hex access token
+        asset_id:
+          type: string
+          format: uuid
+        expires_at:
+          type: string
+          format: date-time
+          description: Token expiry time (UTC)
+        access_url:
+          type: string
+          description: URL to access the private asset
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Error message
+
+  responses:
+    BadRequest:
+      description: Bad request (e.g. empty file)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: Uploaded file is empty.
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: Asset not found.
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
