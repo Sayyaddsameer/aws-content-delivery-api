@@ -1,0 +1,17 @@
+version: "3.9"
+
+# Production docker-compose: connects to real AWS S3, RDS PostgreSQL, and CloudFront.
+# No MinIO or local PostgreSQL containers — all data services are on AWS.
+#
+# Usage:
+#   docker-compose -f docker-compose.prod.yml up -d
+
+services:
+  app:
+    build: .
+    container_name: cdn_app_prod
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    restart: unless-stopped
